@@ -1,13 +1,11 @@
 #!/bin/sh
 
-# shadowsocks script for HND router with kernel 4.1.27 merlin firmware
+# shadowsocks script for HND/AXHND router with kernel 4.1.27/4.1.51 merlin firmware
 
-eval `dbus export ss`
-source /koolshare/scripts/base.sh
-source helper.sh
+source /koolshare/scripts/ss_base.sh
+#-----------------------------------------------
 # Variable definitions
 THREAD=$(grep -c '^processor' /proc/cpuinfo)
-alias echo_date='echo 【$(TZ=UTC-8 date -R +%Y年%m月%d日\ %X)】:'
 dbus set ss_basic_version_local=`cat /koolshare/ss/version`
 LOG_FILE=/tmp/upload/ss_log.txt
 CONFIG_FILE=/koolshare/ss/ss.json
@@ -19,33 +17,11 @@ ISP_DNS1=$(nvram get wan0_dns|sed 's/ /\n/g'|grep -v 0.0.0.0|grep -v 127.0.0.1|s
 ISP_DNS2=$(nvram get wan0_dns|sed 's/ /\n/g'|grep -v 0.0.0.0|grep -v 127.0.0.1|sed -n 2p)
 IFIP_DNS1=`echo $ISP_DNS1|grep -E "([0-9]{1,3}[\.]){3}[0-9]{1,3}|:"`
 IFIP_DNS2=`echo $ISP_DNS2|grep -E "([0-9]{1,3}[\.]){3}[0-9]{1,3}|:"`
-gfw_on=`dbus list ss_acl_mode_|cut -d "=" -f 2 | grep -E "1"`
-chn_on=`dbus list ss_acl_mode_|cut -d "=" -f 2 | grep -E "2|3|4"`
-all_on=`dbus list ss_acl_mode_|cut -d "=" -f 2 | grep -E "5"`
 lan_ipaddr=$(nvram get lan_ipaddr)
 ip_prefix_hex=`nvram get lan_ipaddr | awk -F "." '{printf ("0x%02x", $1)} {printf ("%02x", $2)} {printf ("%02x", $3)} {printf ("00/0xffffff00\n")}'`
-[ "$ss_basic_mode" == "4" ] && ss_basic_mode=3
-game_on=`dbus list ss_acl_mode|cut -d "=" -f 2 | grep 3`
-[ -n "$game_on" ] || [ "$ss_basic_mode" == "3" ] && mangle=1
-ss_basic_password=`echo $ss_basic_password|base64_decode`
 ARG_OBFS=""
 
-# 兼容1.2.0及其以下
-[ -z "$ss_basic_type" ] && {
-	if [ -n "$ss_basic_rss_protocol" ];then
-		ss_basic_type="1"
-	else
-		if [ -n "$ss_basic_koolgame_udp" ];then
-			ss_basic_type="2"
-		else
-			if [ -n "$ss_basic_v2ray_use_json" ];then
-				ss_basic_type="3"
-			else
-				ss_basic_type="0"
-			fi
-		fi
-	fi
-}
+#-----------------------------------------------
 
 cmd() {
 	echo_date "$*" 2>&1
@@ -174,6 +150,9 @@ __get_server_resolver(){
 	[ "$value_1" == "9" ] && res="117.50.22.22"
 	[ "$value_1" == "10" ] && res="180.76.76.76"
 	[ "$value_1" == "11" ] && res="119.29.29.29"
+	[ "$value_1" == "13" ] && res="8.8.8.8"
+	[ "$value_1" == "14" ] && res="8.8.4.4"
+	[ "$value_1" == "15" ] && res="9.9.9.9"
 	if [ "$value_1" == "12" ];then
 		if [ -n "$value_2" ];then
 			res=$(__valid_ip "$value_2")
@@ -343,14 +322,15 @@ kill_process(){
 		echo_date 关闭haveged进程...
 		killall haveged >/dev/null 2>&1
 	fi
+	echo 1 > /proc/sys/net/ipv4/tcp_fastopen
+	
 }
 
 # ================================= ss prestart ===========================
 ss_pre_start(){
-	lb_enable=`dbus get ss_lb_enable`
-	if [ "$lb_enable" == "1" ];then
+	if [ "$ss_lb_enable" == "1" ];then
 		echo_date ---------------------- 【科学上网】 启动前触发脚本 ----------------------
-		if [ `dbus get ss_basic_server | grep -o "127.0.0.1"` ] && [ `dbus get ss_basic_port` == `dbus get ss_lb_port` ];then
+		if [ `echo $ss_basic_server | grep -o "127.0.0.1"` ] && [ "$ss_basic_port" == "$ss_lb_port" ];then
 			echo_date 插件启动前触发:触发启动负载均衡功能！
 			#start haproxy
 			sh /koolshare/scripts/ss_lb_config.sh
@@ -358,7 +338,7 @@ ss_pre_start(){
 			echo_date 插件启动前触发:未选择负载均衡节点，不触发负载均衡启动！
 		fi
 	else
-		if [ `dbus get ss_basic_server | grep -o "127.0.0.1"` ] && [ `dbus get ss_basic_port` == `dbus get ss_lb_port` ];then
+		if [ `echo $ss_basic_server | grep -o "127.0.0.1"` ] && [ "$ss_basic_port" == "$ss_lb_port" ];then
 			echo_date 插件启动前触发【警告】：你选择了负载均衡节点，但是负载均衡开关未启用！！
 		#else
 			#echo_date ss启动前触发：你选择了普通节点，不触发负载均衡启动！
@@ -1144,13 +1124,28 @@ start_ss_redir(){
 }
 
 fire_redir(){
-	[ "$ss_basic_type" == "0" ] && [ "$ss_basic_mcore" == "1" ] && local ARG="--reuse-port" || local ARG=""
+	[ "$ss_basic_type" == "0" ] && [ "$ss_basic_mcore" == "1" ] && local ARG_1="--reuse-port" || local ARG_1=""
+	if [ "$ss_basic_type" == "0" ] && [ "$ss_basic_tfo" == "1" ];then
+		local ARG_2="--fast-open"
+		echo_date $BIN开启tcp fast open支持.
+		echo 3 > /proc/sys/net/ipv4/tcp_fastopen
+	else
+		local ARG_2=""
+	fi
+
+	if [ "$ss_basic_type" == "0" ] && [ "$ss_basic_tnd" == "1" ];then
+		echo_date $BIN开启TCP_NODELAY支持.
+		local ARG_3="--no-delay"
+	else
+		local ARG_3=""
+	fi
+	
 	if [ "$ss_basic_mcore" == "1" ];then
 		echo_date $BIN开启$THREAD线程支持.
 		local i=1
 		while [ $i -le $THREAD ]
 		do
-			cmd $1 $ARG -f /var/run/ss_$i.pid
+			cmd $1 $ARG_1 $ARG_2 $ARG_3 -f /var/run/ss_$i.pid
 			let i++
 		done
 	else
@@ -1188,11 +1183,11 @@ start_koolgame(){
 
 get_function_switch() {
 	case "$1" in
-		0)
-			echo "false"
-		;;
 		1)
 			echo "true"
+		;;
+		0|*)
+			echo "false"
 		;;
 	esac
 }
@@ -1315,9 +1310,9 @@ creat_v2ray_json(){
 			;;
 			h2)
 				local h2="{
-        		\"path\": $(get_path $ss_basic_v2ray_network_path),
-        		\"host\": $(get_h2_host $ss_basic_v2ray_network_host)
-      			}"
+				\"path\": $(get_path $ss_basic_v2ray_network_path),
+				\"host\": $(get_h2_host $ss_basic_v2ray_network_host)
+				}"
 			;;
 		esac
 		cat > "$V2RAY_CONFIG_FILE_TMP" <<-EOF
@@ -1377,7 +1372,7 @@ creat_v2ray_json(){
 					"settings": {
 						"vnext": [
 							{
-								"address": "`dbus get ss_basic_server`",
+								"address": "$ss_basic_server_orig",
 								"port": $ss_basic_port,
 								"users": [
 									{
@@ -1448,13 +1443,9 @@ creat_v2ray_json(){
 							}
 						]
 						}"
-		#local TEMPLATE=`cat /koolshare/ss/rules/v2ray_template.json`
 		echo_date 解析V2Ray配置文件...
 		echo $TEMPLATE | jq --argjson args "$OUTBOUND" '. + {outbound: $args}' > "$V2RAY_CONFIG_FILE"
-		#echo $TEMPLATE | jq --argjson args "$JSON_INFO" '. + $args' > "$V2RAY_CONFIG_FILE"
-		
 		echo_date V2Ray配置文件写入成功到"$V2RAY_CONFIG_FILE"
-		#close_in_five
 		
 		# 检测用户json的服务器ip地址
 		v2ray_protocal=`cat "$V2RAY_CONFIG_FILE" | jq -r .outbound.protocol`
@@ -1542,9 +1533,9 @@ creat_v2ray_json(){
 		echo_date $result
 		echo_date V2Ray配置文件通过测试!!!
 	else
-		rm -rf "$V2RAY_CONFIG_FILE_TMP"
-		rm -rf "$V2RAY_CONFIG_FILE"
 		echo_date V2Ray配置文件没有通过测试，请检查设置!!!
+		#rm -rf "$V2RAY_CONFIG_FILE_TMP"
+		#rm -rf "$V2RAY_CONFIG_FILE"
 		close_in_five
 	fi
 }
@@ -1579,10 +1570,10 @@ write_cron_job(){
 	sed -i '/ssnodeupdate/d' /var/spool/cron/crontabs/* >/dev/null 2>&1
 	if [ "$ss_basic_node_update" = "1" ];then
 		if [ "$ss_basic_node_update_day" = "7" ];then
-			cru a ssnodeupdate "0 $ss_basic_node_update_hr * * * /koolshare/scripts/ss_online_update.sh 3"
+			cru a ssnodeupdate "0 $ss_basic_node_update_hr * * * /koolshare/scripts/ss_online_update.sh fancyss 3"
 			echo_date "设置订阅服务器自动更新订阅服务器在每天 $ss_basic_node_update_hr 点。"
 		else
-			cru a ssnodeupdate "0 $ss_basic_node_update_hr * * $ss_basic_node_update_day /koolshare/scripts/ss_online_update.sh 3"
+			cru a ssnodeupdate "0 $ss_basic_node_update_hr * * $ss_basic_node_update_day /koolshare/scripts/ss_online_update.sh fancyss 3"
 			echo_date "设置订阅服务器自动更新订阅服务器在星期 $ss_basic_node_update_day 的 $ss_basic_node_update_hr 点。"
 		fi
 	fi
@@ -1672,7 +1663,7 @@ flush_nat(){
 	ip_rule_exist=`ip rule show | grep "lookup 310" | grep -c 310`
 	if [ -n "ip_rule_exist" ];then
 		#echo_date 清除重复的ip rule规则.
-		until [ "$ip_rule_exist" = 0 ]
+		until [ "$ip_rule_exist" == "0" ]
 		do 
 			IP_ARG=`ip rule show | grep "lookup 310"|head -n 1|cut -d " " -f3,4,5,6`
 			ip rule del $IP_ARG
@@ -1706,7 +1697,7 @@ add_white_black_ip(){
 	fi
 	
 	if [ -n "$ss_wan_black_ip" ];then
-		ss_wan_black_ip=`dbus get ss_wan_black_ip|base64_decode|sed '/\#/d'`
+		ss_wan_black_ip=`echo $ss_wan_black_ip|base64_decode|sed '/\#/d'`
 		echo_date 应用IP/CIDR黑名单
 		for ip in $ss_wan_black_ip
 		do
@@ -1805,11 +1796,11 @@ lan_acess_control(){
 	if [ -n "$acl_nu" ]; then
 		for acl in $acl_nu
 		do
-			ipaddr=`dbus get ss_acl_ip_$acl`
-			ipaddr_hex=`dbus get ss_acl_ip_$acl | awk -F "." '{printf ("0x%02x", $1)} {printf ("%02x", $2)} {printf ("%02x", $3)} {printf ("%02x\n", $4)}'`
-			ports=`dbus get ss_acl_port_$acl`
-			proxy_mode=`dbus get ss_acl_mode_$acl`
-			proxy_name=`dbus get ss_acl_name_$acl`
+			ipaddr=$(eval echo \$ss_acl_ip_$acl)
+			ipaddr_hex=$(echo $ipaddr | awk -F "." '{printf ("0x%02x", $1)} {printf ("%02x", $2)} {printf ("%02x", $3)} {printf ("%02x\n", $4)}')
+			ports=$(eval echo \$ss_acl_port_$acl)
+			proxy_mode=$(eval echo \$ss_acl_mode_$acl)
+			proxy_name=$(eval echo \$ss_acl_name_$acl)
 			if [ "$ports" == "all" ];then
 				ports=""
 				echo_date 加载ACL规则：【$ipaddr】【全部端口】模式为：$(get_mode_name $proxy_mode)
@@ -2014,7 +2005,7 @@ set_ss_reboot_job(){
 			cru a ss_reboot ${ss_basic_time_min} ${ss_basic_time_hour}" */"${ss_basic_inter_day} " * * /bin/sh /koolshare/ss/ssconfig.sh restart"
 		fi
 	elif [[ "${ss_reboot_check}" == "5" ]]; then
-		check_custom_time=`dbus get ss_basic_custom | base64_decode`
+		check_custom_time=`echo ss_basic_custom | base64_decode`
 		echo_date "【科学上网】：设置每天${check_custom_time}时的${ss_basic_time_min}分重启插件..."
 		cru a ss_reboot ${ss_basic_time_min} ${check_custom_time}" * * * /bin/sh /koolshare/ss/ssconfig.sh restart"
 	fi
@@ -2112,8 +2103,8 @@ detect(){
 	
 	#检测v2ray模式下是否启用虚拟内存
 	if [ "$ss_basic_type" == "3" -a -z "$WAN_ACTION" ];then
-		SWAPSTATUS=`free|grep Swap|awk '{print $2}'`
-		if [ "$MODEL" != "GT-AC5300" ];then
+		if [ "$MODEL" != "GT-AC5300" ] && [ "$MODEL" != "RT-AX88U" ];then
+			SWAPSTATUS=`free|grep Swap|awk '{print $2}'`
 			if [ "$SWAPSTATUS" != "0" ];then
 				echo_date "你选择了v2ray节点，当前系统已经启用虚拟内存！！符合启动条件！"
 			else
@@ -2204,15 +2195,53 @@ umount_dnsmasq_now(){
 	esac
 }
 
+httping_check(){
+	[ "$ss_basic_check" != "1" ] && return
+	echo "--------------------------------------------------------------------------------------"
+	echo "检查国内可用性..."
+	httping www.baidu.com -s -Z -r --ts -c 10 -i 0.5 -t 5  | tee /tmp/upload/china.txt
+	if [ "$?" != "0" ];then
+		ehco 当前节点无法访问国内网络！
+		#dbus set ssconf_basic_node=$
+	fi
+	echo "--------------------------------------------------------------------------------------"
+	echo "检查国外可用性..."
+	#httping www.google.com.tw -s -Z --proxy 127.0.0.1:23456 -5 -r --ts -c 5
+	httping www.google.com.tw -s -Z -5 -r --ts -c 10 -i 0.5 -t 2
+	if [ "$?" != "0" ];then
+		echo "当前节点无法访问国外网络！"
+		echo "自动切换到下一个节点..."
+		ssconf_basic_node=$(($ssconf_basic_node+1))
+		dbus set ssconf_basic_node=$ssconf_basic_node
+		apply_ss
+		return 1
+		#start-stop-daemon -S -q -x /koolshare/ss/ssconfig.sh 2>&1
+	fi
+	echo "--------------------------------------------------------------------------------------"
+}
+
+stop_status(){
+	kill -9 $(pidof ss_status_main.sh) >/dev/null 2>&1
+	kill -9 $(pidof ss_status.sh) >/dev/null 2>&1
+	killall curl >/dev/null 2>&1
+	rm -rf /tmp/upload/ss_status.txt
+}
+
+check_status(){
+	if [ "$ss_failover_enable" == "1" ];then
+		echo "=========================================== start/restart ==========================================" >> /tmp/upload/ssf_status.txt
+		echo "=========================================== start/restart ==========================================" >> /tmp/upload/ssc_status.txt
+		start-stop-daemon -S -q -b -x /koolshare/scripts/ss_status_main.sh
+	fi
+}
+
 disable_ss(){
 	ss_pre_stop
 	echo_date ======================= 梅林固件 - 【科学上网】 ========================
 	echo_date
 	echo_date ------------------------- 关闭【科学上网】 -----------------------------
-	nvram set ss_mode=0
-	dbus set dns2socks=0
 	dbus remove ss_basic_server_ip
-	nvram commit
+	stop_status
 	kill_process
 	remove_ss_trigger_job
 	remove_ss_reboot_job
@@ -2232,14 +2261,13 @@ apply_ss(){
 	echo_date ======================= 梅林固件 - 【科学上网】 ========================
 	echo_date
 	echo_date ------------------------- 启动【科学上网】 -----------------------------
-	nvram set ss_mode=0
-	dbus set dns2socks=0
-	nvram commit
+	stop_status
 	kill_process
 	remove_ss_trigger_job
 	remove_ss_reboot_job
 	restore_conf
 	# restart dnsmasq when ss server is not ip or on router boot
+	umount_dnsmasq_now
 	restart_dnsmasq
 	flush_nat
 	kill_cron_job
@@ -2275,6 +2303,9 @@ apply_ss(){
 	write_numbers
 	# post-start
 	ss_post_start
+	#httping_check
+	#[ "$?" == "1" ] && return 1
+	check_status
 	echo_date ------------------------ 【科学上网】 启动完毕 ------------------------
 }
 
@@ -2326,7 +2357,7 @@ stop)
 	set_lock
 	disable_ss
 	echo_date
-	echo_date 你已经成功关闭shadowsocks服务~
+	echo_date 你已经成功关闭科学上网服务~
 	echo_date See you again!
 	echo_date
 	echo_date ======================= 梅林固件 - 【科学上网】 ========================

@@ -1,8 +1,12 @@
 #! /bin/sh
 
-eval `dbus export ss`
+# shadowsocks script for HND/AXHND router with kernel 4.1.27/4.1.51 merlin firmware
+
+source /koolshare/scripts/base.sh
+eval $(dbus export ss)
 alias echo_date='echo 【$(TZ=UTC-8 date -R +%Y年%m月%d日\ %X)】:'
 mkdir -p /koolshare/ss
+mkdir -p /tmp/upload
 
 # 判断路由架构和平台
 case $(uname -m) in
@@ -41,6 +45,15 @@ if [ -n "$MOUNTED" ];then
 	service restart_dnsmasq >/dev/null 2>&1
 fi
 
+# flush previous ping value
+pings=`dbus list ssconf_basic_ping | sort -n -t "_" -k 4|cut -d "=" -f 1`
+if [ -n "$pings" ];then
+	for ping in $pings
+	do
+		dbus remove "$ping"
+	done
+fi
+
 #升级前先删除无关文件
 echo_date 清理旧文件
 rm -rf /koolshare/ss/*
@@ -71,9 +84,12 @@ rm -rf /koolshare/bin/v2ctl
 rm -rf /koolshare/bin/https_dns_proxy
 rm -rf /koolshare/bin/haveged
 rm -rf /koolshare/bin/https_dns_proxy
+rm -rf /koolshare/bin/httping
 rm -rf /koolshare/bin/dnsmassq
 rm -rf /koolshare/res/icon-shadowsocks.png
 rm -rf /koolshare/res/ss-menu.js
+rm -rf /koolshare/res/qrcode.js
+rm -rf /koolshare/res/tablednd.js
 rm -rf /koolshare/res/all.png
 rm -rf /koolshare/res/gfw.png
 rm -rf /koolshare/res/chn.png
@@ -110,9 +126,9 @@ cp -rf /tmp/shadowsocks/uninstall.sh /koolshare/scripts/uninstall_shadowsocks.sh
 echo_date 复制相关的网页文件！
 cp -rf /tmp/shadowsocks/webs/* /koolshare/webs/
 cp -rf /tmp/shadowsocks/res/* /koolshare/res/
-if [ "`nvram get model`" == "GT-AC5300" ] || [ -n "`nvram get extendno | grep koolshare`" -a "`nvram get productid`" == "RT-AC86U" ];then
-	cp -rf /tmp/shadowsocks/GT-AC5300/webs/* /koolshare/webs/
-	cp -rf /tmp/shadowsocks/GT-AC5300/res/* /koolshare/res/
+
+if [ "`nvram get model`" == "GT-AC5300" ] || [ "`nvram get model`" == "GT-AX11000" ] || [ -n "`nvram get extendno | grep koolshare`" -a "`nvram get productid`" == "RT-AC86U" ];then
+	[ -d "/tmp/shadowsocks/rog/res/" ] && cp -rf /tmp/shadowsocks/rog/res/* /koolshare/res/
 fi
 
 echo_date 为新安装文件赋予执行权限...
@@ -137,10 +153,8 @@ echo_date 创建一些二进制文件的软链接！
 echo_date 设置一些默认值
 [ -z "$ss_dns_china" ] && dbus set ss_dns_china=11
 [ -z "$ss_dns_foreign" ] && dbus set ss_dns_foreign=1
-[ -z "$ss_acl_default_mode" ] && [ -n "$ss_basic_mode" ] && dbus set ss_acl_default_mode="$ss_basic_mode"
-[ -z "$ss_acl_default_mode" ] && [ -z "$ss_basic_mode" ] && dbus set ss_acl_default_mode=1
+[ -z "$ss_acl_default_mode" ] && dbus set ss_acl_default_mode=1
 [ -z "$ss_acl_default_port" ] && dbus set ss_acl_default_port=all
-[ "$ss_basic_v2ray_network" == "ws_hd" ] && dbus set ss_basic_v2ray_network="ws"
 
 # 离线安装时设置软件中心内储存的版本号和连接
 CUR_VERSION=`cat /koolshare/ss/version`
@@ -151,8 +165,7 @@ dbus set softcenter_module_shadowsocks_title="科学上网"
 dbus set softcenter_module_shadowsocks_description="科学上网"
 
 # 设置v2ray 版本号
-dbus set ss_basic_v2ray_version="v4.9.0"
-dbus set ss_basic_v2ray_date="20181212"
+dbus set ss_basic_v2ray_version="v4.18.0"
 
 echo_date 一点点清理工作...
 rm -rf /tmp/shadowsocks* >/dev/null 2>&1
